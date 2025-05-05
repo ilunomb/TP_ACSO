@@ -28,13 +28,12 @@ int inode_iget(struct unixfilesystem *fs, int inumber, struct inode *inp) {
  * TODO
  */
 int inode_indexlookup(struct unixfilesystem *fs, struct inode *inp, int blockNum) {
-    if (!(inp->i_mode & IALLOC)) return -1;
+    if (!inode_is_allocated(inp)) return -1;
 
-    // No es archivo "large" → bloques directos
-    if ((inp->i_mode & ILARG) == 0) {
+    if (!inode_is_large(inp)) {
         if (blockNum < 0 || blockNum >= 8) return -1;
         return inp->i_addr[blockNum];
-    }
+    }    
 
     // Es archivo "large"
     if (blockNum < 0 || blockNum >= 7 * 256 + 256 * 256) return -1;
@@ -69,4 +68,19 @@ int inode_indexlookup(struct unixfilesystem *fs, struct inode *inp, int blockNum
 
 int inode_getsize(struct inode *inp) {
   return ((inp->i_size0 << 16) | inp->i_size1); 
+}
+
+
+int inode_is_allocated(struct inode *in) {
+    return (in->i_mode & IALLOC) != 0;
+}
+
+
+int inode_is_large(struct inode *in) {
+    return (in->i_mode & ILARG) != 0;
+}
+
+
+int inode_is_directory(struct inode *in) {
+    return (in->i_mode & IFMT) == IFDIR;
 }

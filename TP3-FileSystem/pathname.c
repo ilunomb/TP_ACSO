@@ -35,7 +35,15 @@ int pathname_lookup(struct unixfilesystem *fs, const char *pathname) {
         }
 
         curr_inumber = dirEnt.d_inumber;
+
+        // Extra: validar que el siguiente componente sea directorio si hay más path por resolver
+        if (*curr != '\0') {
+            struct inode in;
+            if (inode_iget(fs, curr_inumber, &in) < 0) return -1;
+            if (!inode_is_directory(&in)) return -1;
+        }
     }
 
     return curr_inumber;
 }
+

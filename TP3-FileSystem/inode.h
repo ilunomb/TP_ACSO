@@ -22,4 +22,9 @@ int inode_indexlookup(struct unixfilesystem *fs, struct inode *inp, int blockNum
  */
 int inode_getsize(struct inode *inp);
 
+int inode_is_allocated(struct inode *in);
+int inode_is_large(struct inode *in);
+int inode_is_directory(struct inode *in);
+
+
 #endif // _INODE_
