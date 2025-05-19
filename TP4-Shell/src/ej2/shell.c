@@ -6,6 +6,43 @@
 
 #define MAX_COMMANDS 200
 
+void split_args_preserving_quotes(char *input, char **args, int *arg_count) {
+    char *p = input;
+    char *start = NULL;
+    *arg_count = 0;
+
+    while (*p) {
+        while (*p == ' ') p++; // saltar espacios
+
+        if (*p == '"') {
+            p++; // saltear la comilla inicial
+            start = p;
+            while (*p && *p != '"') p++;
+            if (*p == '"') {
+                *p = '\0';
+                args[(*arg_count)++] = start;
+                p++; // saltear la comilla final
+            }
+        } else {
+            start = p;
+            while (*p && *p != ' ' && *p != '"') p++;
+            if (*p) {
+                char end = *p;
+                *p = '\0';
+                args[(*arg_count)++] = start;
+                if (end == '"') continue;
+                p++;
+            } else {
+                args[(*arg_count)++] = start;
+                break;
+            }
+        }
+    }
+
+    args[*arg_count] = NULL;
+}
+
+
 int main() {
 
     char command[256];
@@ -25,6 +62,8 @@ int main() {
            characters not in the string specified in the second argument ("\n" in this case). */
         command[strcspn(command, "\n")] = '\0';
 
+        if (strcmp(command, "exit") == 0) break;
+
         /* Tokenizes the command string using the pipe character (|) as a delimiter using the strtok() function. 
            Each resulting token is stored in the commands[] array. 
            The strtok() function breaks the command string into tokens (substrings) separated by the pipe character |. 
@@ -41,7 +80,59 @@ int main() {
         for (int i = 0; i < command_count; i++) 
         {
             printf("Command %d: %s\n", i, commands[i]);
-        }    
+        }
+
+        int pipes[command_count - 1][2];
+
+        for (int i = 0; i < command_count - 1; i++) {
+            if (pipe(pipes[i]) < 0) {
+                perror("pipe");
+                exit(1);
+            }
+        }
+
+        for (int i = 0; i < command_count; i++) {
+            pid_t pid = fork();
+            if (pid == 0) {
+                // Redireccionar entrada si no soy el primero
+                if (i > 0) {
+                    dup2(pipes[i - 1][0], STDIN_FILENO);
+                }
+                // Redireccionar salida si no soy el último
+                if (i < command_count - 1) {
+                    dup2(pipes[i][1], STDOUT_FILENO);
+                }
+
+                // Cerrar todos los pipes
+                for (int j = 0; j < command_count - 1; j++) {
+                    close(pipes[j][0]);
+                    close(pipes[j][1]);
+                }
+
+                // Parseo de argumentos (respetando comillas)
+                char *args[64];
+                int arg_count = 0;
+                split_args_preserving_quotes(commands[i], args, &arg_count);
+
+                execvp(args[0], args);
+                perror("execvp");
+                exit(1);
+            }
+        }
+
+        // Cerrar todos los pipes en el padre
+        for (int i = 0; i < command_count - 1; i++) {
+            close(pipes[i][0]);
+            close(pipes[i][1]);
+        }
+
+        // Esperar a todos los hijos
+        for (int i = 0; i < command_count; i++) {
+            wait(NULL);
+        }
+
+        // Resetear contador
+        command_count = 0;
     }
     return 0;
 }
