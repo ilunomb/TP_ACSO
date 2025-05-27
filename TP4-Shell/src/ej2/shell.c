@@ -3,42 +3,42 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <string.h>
+#include <ctype.h> 
 
 #define MAX_COMMANDS 200
 
 void split_args_preserving_quotes(char *input, char **args, int *arg_count) {
     char *p = input;
-    char *start = NULL;
     *arg_count = 0;
 
     while (*p) {
-        while (*p == ' ') p++; // saltar espacios
+        // saltar espacios en blanco
+        while (*p && isspace((unsigned char)*p)) {
+            *p++ = '\0';
+        }
+        if (!*p) break;
 
         if (*p == '"') {
-            p++; // saltear la comilla inicial
-            start = p;
+            // argumento entre comillas
+            p++;
+            args[(*arg_count)++] = p;
             while (*p && *p != '"') p++;
             if (*p == '"') {
                 *p = '\0';
-                args[(*arg_count)++] = start;
-                p++; // saltear la comilla final
+                p++;
             }
         } else {
-            start = p;
-            while (*p && *p != ' ' && *p != '"') p++;
+            // argumento simple
+            args[(*arg_count)++] = p;
+            while (*p && !isspace((unsigned char)*p)) p++;
             if (*p) {
-                char end = *p;
                 *p = '\0';
-                args[(*arg_count)++] = start;
-                if (end == '"') continue;
                 p++;
-            } else {
-                args[(*arg_count)++] = start;
-                break;
             }
         }
     }
 
+    // terminar array
     args[*arg_count] = NULL;
 }
 
