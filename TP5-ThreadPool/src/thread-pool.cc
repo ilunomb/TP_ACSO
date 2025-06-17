@@ -1,31 +1,52 @@
+// thread-pool.cc
 #include "thread-pool.h"
-#include <queue>
 
 using namespace std;
 
+// definición de miembros estáticos
+mutex ThreadPool::registryMutex;
+unordered_set<ThreadPool*> ThreadPool::activePools;
+
 ThreadPool::ThreadPool(size_t numThreads)
-    : wts(numThreads),
-      done(false),
-      taskSem(0),
-      workerAvailableSem(numThreads),
-      allTasksDone(0),
-      remainingTasks(0)
+  : wts(numThreads),
+    done(false),
+    taskSem(0),
+    workerAvailableSem(numThreads),
+    remainingTasks(0)
 {
-    for (size_t i = 0; i < numThreads; ++i) {
-        wts[i].id = i;
-        wts[i].available = true;
-        wts[i].sem = new Semaphore(0);
-        wts[i].ts = thread([this, i]() { worker(i); });
+    // registrar instancia activa
+    {
+        lock_guard<mutex> reg(registryMutex);
+        activePools.insert(this);
     }
 
-    dt = thread([this]() { dispatcher(); });
+    // arrancar hilos workers
+    for (size_t i = 0; i < numThreads; ++i) {
+        wts[i].id = static_cast<int>(i);
+        wts[i].available = true;
+        wts[i].task = nullptr;
+        wts[i].sem = new Semaphore(0);
+        wts[i].ts = thread(&ThreadPool::worker, this, static_cast<int>(i));
+    }
+    // arrancar dispatcher
+    dt = thread(&ThreadPool::dispatcher, this);
 }
 
 void ThreadPool::schedule(const function<void(void)>& thunk) {
+    if (!thunk)
+        throw invalid_argument("ThreadPool::schedule: tarea nula no permitida");
+
     {
-        lock_guard<mutex> lock(queueLock);
+        lock_guard<mutex> reg(registryMutex);
+        if (activePools.find(this) == activePools.end())
+            throw runtime_error("ThreadPool destruido: schedule() no permitido");
+    }
+
+    // encolar tarea
+    {
+        lock_guard<mutex> lk(queueLock);
         taskQueue.push(thunk);
-        remainingTasks++;
+        remainingTasks.fetch_add(1);
     }
     taskSem.signal();
 }
@@ -33,14 +54,14 @@ void ThreadPool::schedule(const function<void(void)>& thunk) {
 void ThreadPool::dispatcher() {
     while (true) {
         taskSem.wait();
-
-        if (done && taskQueue.empty())
+        if (done.load() && taskQueue.empty())
             break;
 
         function<void(void)> task;
         {
-            lock_guard<mutex> lock(queueLock);
-            if (taskQueue.empty()) continue;
+            lock_guard<mutex> lk(queueLock);
+            if (taskQueue.empty())
+                continue;
             task = taskQueue.front();
             taskQueue.pop();
         }
@@ -48,7 +69,7 @@ void ThreadPool::dispatcher() {
         workerAvailableSem.wait();
 
         for (auto& w : wts) {
-            lock_guard<mutex> lock(w.lock);
+            lock_guard<mutex> lk(w.lock);
             if (w.available) {
                 w.available = false;
                 w.task = task;
@@ -64,51 +85,64 @@ void ThreadPool::worker(int id) {
 
     while (true) {
         w.sem->wait();
-
-        if (done && w.task == nullptr)
+        if (done.load() && w.task == nullptr)
             break;
 
-        function<void(void)> task;
+        function<void(void)> fn;
         {
-            lock_guard<mutex> lock(w.lock);
-            task = w.task;
+            lock_guard<mutex> lk(w.lock);
+            fn = w.task;
         }
-
-        if (task) task();
+        if (fn) fn();
 
         {
-            lock_guard<mutex> lock(w.lock);
+            lock_guard<mutex> lk(w.lock);
             w.available = true;
             w.task = nullptr;
         }
-
         workerAvailableSem.signal();
 
-        if (--remainingTasks == 0)
-            allTasksDone.signal();
+        // si era la última tarea pendiente, notificar a todos los waiters
+        if (remainingTasks.fetch_sub(1) == 1) {
+            lock_guard<mutex> lk(doneMutex);
+            doneCV.notify_all();
+        }
     }
 }
 
 void ThreadPool::wait() {
-    while (remainingTasks > 0)
-        allTasksDone.wait();
+    unique_lock<mutex> lk(doneMutex);
+    doneCV.wait(lk, [&]() { return remainingTasks.load() == 0; });
 }
 
 ThreadPool::~ThreadPool() {
-    wait();
-    done = true;
-
-    taskSem.signal(); // Wake up dispatcher
-    dt.join();
-
-    // Despertar a todos los workers
-    for (auto& w : wts) {
-        w.task = nullptr; // ← clave para que worker sepa que no hay más tareas
-        w.sem->signal();
+    // retirar del registro de instancias
+    {
+        lock_guard<mutex> reg(registryMutex);
+        activePools.erase(this);
     }
 
+    // esperar a que todas las tareas terminen
+    wait();
+    done.store(true);               // store() en lugar de asignación directa
+
+    // despertar dispatcher
+    taskSem.signal();
+    if (dt.joinable())
+        dt.join();
+
+    // despertar a todos los workers para que salgan, protegiendo w.task
     for (auto& w : wts) {
-        if (w.ts.joinable()) w.ts.join();
+        {
+            lock_guard<mutex> lk(w.lock);
+            w.task = nullptr;
+        }
+        w.sem->signal();
+    }
+    // unirse y liberar semáforos
+    for (auto& w : wts) {
+        if (w.ts.joinable())
+            w.ts.join();
         delete w.sem;
     }
 }

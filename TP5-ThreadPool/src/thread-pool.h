@@ -1,3 +1,4 @@
+// thread-pool.h
 #ifndef _thread_pool_
 #define _thread_pool_
 
@@ -8,6 +9,9 @@
 #include <queue>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
+#include <unordered_set>
+#include <stdexcept>
 #include "Semaphore.h"
 
 using namespace std;
@@ -32,16 +36,29 @@ class ThreadPool {
     void worker(int id);
     void dispatcher();
 
+    // dispatcher thread
     thread dt;
+    // workers
     vector<worker_t> wts;
-    bool done;
-    mutex queueLock;
+    // shutdown flag (ahora atómico para evitar data races)
+    atomic<bool> done;
 
+    // task queue + semaphore
+    mutex queueLock;
     queue<function<void(void)>> taskQueue;
     Semaphore taskSem;
     Semaphore workerAvailableSem;
-    Semaphore allTasksDone;
+
+    // remaining tasks counter
     atomic<int> remainingTasks;
+
+    // para wait(): mutex + condition_variable
+    mutex doneMutex;
+    condition_variable doneCV;
+
+    // registro de instancias activas para detectar uso tras destrucción
+    static mutex registryMutex;
+    static unordered_set<ThreadPool*> activePools;
 
     ThreadPool(const ThreadPool& original) = delete;
     ThreadPool& operator=(const ThreadPool& rhs) = delete;

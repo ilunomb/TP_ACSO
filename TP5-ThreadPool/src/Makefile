@@ -17,8 +17,8 @@ advanced:
 	$(CXX) $(CXXFLAGS) -o $(TARGET) thread-pool.cc Semaphore.cc tpcustomtest.cc
 
 # === Custom mega test target ===
-# custom:
-# 	$(CXX) $(CXXFLAGS) -o $(TARGET) thread-pool.cc Semaphore.cc test_rama.cc
+custom:
+	$(CXX) $(CXXFLAGS) -o $(TARGET) thread-pool.cc Semaphore.cc test_custom.cc
 
 # Clean target
 clean:
